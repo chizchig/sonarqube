@@ -3,13 +3,19 @@ resource "tls_private_key" "rr" {
   rsa_bits  = 4096
 }
 
-resource "local_sensitive_file" "key" {
-  depends_on = [tls_private_key.rr]
-  content    = tls_private_key.rr.private_key_pem
-  filename   = "${path.module}/private_key.pem"  # Save the private key securely
-}
-
 resource "aws_key_pair" "rr-tf" {
-  key_name   = "key-tf"
-  public_key = tls_private_key.rr.public_key_openssh  # Use the generated public key
+  key_name_prefix = "key-tf-"  # Using prefix instead of fixed name
+  public_key      = tls_private_key.rr.public_key_openssh
+
+  lifecycle {
+    create_before_destroy = true
+    ignore_changes = [
+      key_name_prefix
+    ]
+  }
+
+  tags = {
+    Name        = "terraform-generated-key"
+    Environment = var.environment
+  }
 }
