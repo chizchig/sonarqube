@@ -1,169 +1,167 @@
 #!/bin/bash
 
-# Exit on error
+# Exit on error and enable debug output
 set -e
+set -x
 
-echo "Starting SonarQube installation..."
+echo "Starting SonarQube installation with debugging..."
 
-# Remove any existing Java installations
-echo "Removing existing Java installations..."
-sudo yum remove java* -y
+# Function to check system resources
+check_system_resources() {
+    echo "Checking system resources..."
+    free -h
+    df -h
+    nproc
+}
 
-# Install Java 11 (prerequisite)
+# Function to verify Java
+verify_java() {
+    echo "Verifying Java installation..."
+    which java
+    java -version
+    echo $JAVA_HOME
+}
+
+# Clean up any previous installation
+echo "Cleaning up previous installation..."
+sudo systemctl stop sonarqube || true
+sudo rm -rf /opt/sonarqube*
+sudo rm -f /etc/systemd/system/sonarqube.service
+
+# Remove existing Java
+echo "Removing existing Java..."
+sudo yum remove -y java* || true
+
+# Install Java 11
 echo "Installing Java 11..."
 sudo yum install -y java-11-amazon-corretto
-
-# Verify Java installation
-java -version
+verify_java
 
 # Install required packages
 echo "Installing required packages..."
 sudo yum install -y unzip wget
 
-# Set up swap space for memory management
-echo "Setting up swap space..."
-if [ ! -f /swapfile ]; then
-    sudo dd if=/dev/zero of=/swapfile bs=1M count=4096
-    sudo chmod 600 /swapfile
-    sudo mkswap /swapfile
-    sudo swapon /swapfile
-    echo '/swapfile none swap sw 0 0' | sudo tee -a /etc/fstab
-fi
+# Configure larger swap
+echo "Configuring swap..."
+sudo swapoff -a || true
+sudo rm -f /swapfile
+sudo dd if=/dev/zero of=/swapfile bs=1M count=8192
+sudo chmod 600 /swapfile
+sudo mkswap /swapfile
+sudo swapon /swapfile
+echo '/swapfile none swap sw 0 0' | sudo tee -a /etc/fstab
 
 # Create sonar user
 echo "Creating sonar user..."
-sudo useradd -r -m -U -d /opt/sonarqube -s /bin/bash sonar || echo "User sonar already exists"
+sudo userdel -r sonar || true
+sudo useradd -r -m -U -d /opt/sonarqube -s /bin/bash sonar
+
+# Set up directories
+echo "Setting up directories..."
+sudo rm -rf /opt/sonarqube
+sudo mkdir -p /opt/sonarqube
+sudo mkdir -p /opt/sonarqube/data
+sudo mkdir -p /opt/sonarqube/temp
+sudo mkdir -p /opt/sonarqube/logs
 
 # Download and install SonarQube
-echo "Downloading and installing SonarQube..."
+echo "Downloading SonarQube..."
 cd /tmp
 sudo wget --no-verbose https://binaries.sonarsource.com/Distribution/sonarqube/sonarqube-9.9.0.65466.zip
 sudo unzip -q sonarqube-9.9.0.65466.zip
-sudo rm -rf /opt/sonarqube
-sudo mv sonarqube-9.9.0.65466 /opt/sonarqube
+sudo cp -r sonarqube-9.9.0.65466/* /opt/sonarqube/
+sudo rm -rf sonarqube-9.9.0.65466*
 
-# Set correct permissions
+# Set permissions
+echo "Setting permissions..."
 sudo chown -R sonar:sonar /opt/sonarqube
 sudo chmod -R 755 /opt/sonarqube
 
 # Configure system limits
 echo "Configuring system limits..."
-sudo tee -a /etc/security/limits.conf << EOF
-sonar   soft    nofile   131072
-sonar   hard    nofile   131072
-sonar   soft    nproc    8192
-sonar   hard    nproc    8192
+sudo tee /etc/security/limits.d/99-sonarqube.conf << EOF
+sonar   soft    nofile   65536
+sonar   hard    nofile   65536
 EOF
 
 sudo tee /etc/sysctl.d/99-sonarqube.conf << EOF
-vm.max_map_count=262144
+vm.max_map_count=524288
 fs.file-max=131072
 EOF
 
-sudo sysctl -p /etc/sysctl.d/99-sonarqube.conf
+sudo sysctl --system
 
-# Configure SonarQube properties
-echo "Configuring SonarQube properties..."
+# Configure SonarQube
+echo "Configuring SonarQube..."
 sudo tee /opt/sonarqube/conf/sonar.properties << EOF
-sonar.web.javaOpts=-Xmx1024m -Xms512m -XX:+HeapDumpOnOutOfMemoryError
-sonar.ce.javaOpts=-Xmx1024m -Xms512m -XX:+HeapDumpOnOutOfMemoryError
-sonar.search.javaOpts=-Xmx1024m -Xms512m -XX:+HeapDumpOnOutOfMemoryError
+sonar.web.javaOpts=-Xmx512m -Xms128m -XX:+HeapDumpOnOutOfMemoryError
+sonar.ce.javaOpts=-Xmx512m -Xms128m -XX:+HeapDumpOnOutOfMemoryError
+sonar.search.javaOpts=-Xmx512m -Xms512m -XX:+HeapDumpOnOutOfMemoryError
 sonar.web.host=0.0.0.0
 sonar.web.port=9000
 sonar.path.data=/opt/sonarqube/data
 sonar.path.temp=/opt/sonarqube/temp
-sonar.jdbc.username=sonar
-sonar.jdbc.password=sonar
+sonar.telemetry.enabled=false
 EOF
 
-# Create directories for SonarQube data
-sudo mkdir -p /opt/sonarqube/data
-sudo mkdir -p /opt/sonarqube/temp
-sudo chown -R sonar:sonar /opt/sonarqube/data
-sudo chown -R sonar:sonar /opt/sonarqube/temp
-sudo chmod -R 755 /opt/sonarqube/data
-sudo chmod -R 755 /opt/sonarqube/temp
-
-# Create systemd service file
-echo "Creating systemd service..."
+# Create service file with enhanced debugging
+echo "Creating service file..."
 sudo tee /etc/systemd/system/sonarqube.service << EOF
 [Unit]
 Description=SonarQube service
 After=syslog.target network.target
 
 [Service]
-Type=forking
-ExecStart=/opt/sonarqube/bin/linux-x86-64/sonar.sh start
+Type=simple
+ExecStart=/opt/sonarqube/bin/linux-x86-64/sonar.sh console
 ExecStop=/opt/sonarqube/bin/linux-x86-64/sonar.sh stop
 User=sonar
 Group=sonar
 Restart=on-failure
-RestartSec=30
-LimitNOFILE=131072
-LimitNPROC=8192
+RestartSec=10
+StandardOutput=append:/opt/sonarqube/logs/stdout.log
+StandardError=append:/opt/sonarqube/logs/stderr.log
+LimitNOFILE=65536
+LimitNPROC=4096
 TimeoutStartSec=180
 Environment=JAVA_HOME=/usr/lib/jvm/java-11
-Environment=SONAR_JAVA_PATH=/usr/lib/jvm/java-11/bin/java
+Environment=PATH=/usr/lib/jvm/java-11/bin:${PATH}
 
 [Install]
 WantedBy=multi-user.target
 EOF
 
-# Reload systemd
-echo "Reloading systemd..."
-sudo systemctl daemon-reload
-
-# Start SonarQube
+# Reload systemd and start service
 echo "Starting SonarQube..."
-sudo systemctl start sonarqube
+sudo systemctl daemon-reload
 sudo systemctl enable sonarqube
+sudo systemctl start sonarqube
 
-# Wait for service to start
-echo "Waiting for SonarQube to start..."
-sleep 60
-
-# Check service status
-echo "Checking service status..."
-sudo systemctl status sonarqube
-
-# Verify port is listening
-echo "Checking if port 9000 is listening..."
-sudo netstat -tulpn | grep 9000
-
-# Show memory status
-echo "Current memory status:"
-free -h
-
-# Show Java version
-echo "Installed Java version:"
-java -version
-
-# Show logs if service failed
-if ! systemctl is-active --quiet sonarqube; then
-    echo "SonarQube failed to start. Checking logs..."
-    echo "=== sonar.log ==="
+# Function to check service status with enhanced logging
+check_service_status() {
+    echo "Checking service status..."
+    sudo systemctl status sonarqube
+    echo "Checking logs..."
     sudo tail -n 50 /opt/sonarqube/logs/sonar.log
-    echo "=== es.log ==="
     sudo tail -n 50 /opt/sonarqube/logs/es.log
-    echo "=== ce.log ==="
-    sudo tail -n 50 /opt/sonarqube/logs/ce.log
-    echo "=== web.log ==="
-    sudo tail -n 50 /opt/sonarqube/logs/web.log
-fi
+    sudo tail -n 50 /opt/sonarqube/logs/stdout.log
+    sudo tail -n 50 /opt/sonarqube/logs/stderr.log
+}
 
-# Print access instructions
-echo "SonarQube installation completed!"
-echo "You can access SonarQube at: http://$(curl -s http://169.254.169.254/latest/meta-data/public-ipv4):9000"
-echo "Default credentials are admin/admin"
-echo "Note: It might take a few minutes for SonarQube to initialize completely."
+# Wait and check status
+echo "Waiting for service to start..."
+sleep 30
+check_service_status
+check_system_resources
 
-# Create a log viewing script for convenience
-sudo tee /usr/local/bin/sonarqube-logs << EOF
+# Create convenience script for log viewing
+sudo tee /usr/local/bin/sonar-logs << EOF
 #!/bin/bash
 echo "=== SonarQube Logs ==="
-sudo tail -f /opt/sonarqube/logs/sonar.log /opt/sonarqube/logs/es.log /opt/sonarqube/logs/web.log /opt/sonarqube/logs/ce.log
+sudo tail -f /opt/sonarqube/logs/sonar.log /opt/sonarqube/logs/es.log
 EOF
+sudo chmod +x /usr/local/bin/sonar-logs
 
-sudo chmod +x /usr/local/bin/sonarqube-logs
-
-echo "A log viewing script has been created. Run 'sonarqube-logs' to view all SonarQube logs."
+echo "Installation complete. To view logs, run: sonar-logs"
+echo "Access SonarQube at: http://$(curl -s http://169.254.169.254/latest/meta-data/public-ipv4):9000"
+echo "Default credentials: admin/admin"
