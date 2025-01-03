@@ -1,6 +1,7 @@
 instance_type               = "t2.medium"
 ami_id                      = "ami-0a5c3558529277641"
 aws_region                  = "us-east-1"
+environment                 = "dev"
 
 internal_subnet_cidr_blocks = [ "10.0.3.0/24", "10.0.4.0/24" ]
 external_subnet_cidr_blocks = [ "10.0.1.0/24", "10.0.2.0/24" ]
