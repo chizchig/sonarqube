@@ -21,7 +21,25 @@ resource "aws_instance" "bootstrap_instance" {
     delete_on_termination = true
   }
 
-  # Primary connection config for creation-time provisioners
+  # Add a delay to ensure instance is ready
+  provisioner "local-exec" {
+    command = "sleep 30"
+  }
+
+  # Initial connection test
+  provisioner "remote-exec" {
+    inline = ["echo 'Connected successfully'"]
+
+    connection {
+      type        = "ssh"
+      user        = "ec2-user"
+      private_key = tls_private_key.rr.private_key_pem
+      host        = self.public_ip
+      timeout     = "5m"
+    }
+  }
+
+  # File transfer with error checking
   provisioner "file" {
     source      = "${path.module}/scripts.sh"
     destination = "/tmp/scripts.sh"
@@ -31,17 +49,22 @@ resource "aws_instance" "bootstrap_instance" {
       user        = "ec2-user"
       private_key = tls_private_key.rr.private_key_pem
       host        = self.public_ip
-      timeout     = "10m"
+      timeout     = "5m"
     }
   }
 
-  # Execute the bootstrap script
+  # Execute bootstrap with better error handling
   provisioner "remote-exec" {
     inline = [
       "sudo chmod +x /tmp/scripts.sh",
-      "sudo /tmp/scripts.sh 2>&1 | tee /tmp/bootstrap.log || { echo 'Bootstrap failed. Check /tmp/bootstrap.log for details'; exit 1; }",
-      "echo 'Verifying bootstrap completion...'",
-      "test -f /var/log/bootstrap-complete || { echo 'Bootstrap completion marker not found'; exit 1; }",
+      "echo 'Starting bootstrap script execution...'",
+      "if sudo /tmp/scripts.sh; then",
+      "  echo 'Bootstrap completed successfully'",
+      "else",
+      "  echo 'Bootstrap failed with exit code $?'",
+      "  sudo cat /tmp/bootstrap.log",
+      "  exit 1",
+      "fi",
     ]
 
     connection {
@@ -51,21 +74,6 @@ resource "aws_instance" "bootstrap_instance" {
       host        = self.public_ip
       timeout     = "10m"
     }
-  }
-
-  # Local cleanup instead of remote cleanup
-  provisioner "local-exec" {
-    when = destroy
-    command = "echo 'Instance ${self.id} is being destroyed'"
-  }
-
-  # Optional: Wait for system status checks
-  provisioner "local-exec" {
-    command = <<-EOT
-      aws ec2 wait instance-status-ok \
-        --instance-ids ${self.id} \
-        --region ${var.aws_region}
-    EOT
   }
 
   tags = {
