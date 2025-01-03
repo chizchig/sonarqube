@@ -21,24 +21,18 @@ resource "aws_instance" "bootstrap_instance" {
     delete_on_termination = true
   }
 
-  # Wait for instance to be ready
-  provisioner "local-exec" {
-    command = <<-EOT
-      echo "Waiting for instance..."
-      aws ec2 wait instance-status-ok \
-        --instance-ids ${self.id} \
-        --region ${var.aws_region}
-      echo "Instance is ready!"
-    EOT
-  }
-
-  # Test SSH connectivity first
+  # Initial setup and debug info
   provisioner "remote-exec" {
     inline = [
-      "echo 'Testing SSH connection...'",
-      "whoami",
-      "pwd",
-      "echo 'SSH connection successful'",
+      "echo 'Testing initial connection...'",
+      "echo 'Current user: '$(whoami)",
+      "echo 'Home directory: '$(pwd)",
+      "echo 'System info: '$(uname -a)",
+      "echo 'Available disk space: '",
+      "df -h",
+      "echo 'Memory info: '",
+      "free -h",
+      "echo 'Initial setup complete'"
     ]
 
     connection {
@@ -47,11 +41,10 @@ resource "aws_instance" "bootstrap_instance" {
       private_key = tls_private_key.rr.private_key_pem
       host        = self.public_ip
       timeout     = "5m"
-      agent       = false
     }
   }
 
-  # Transfer the script file
+  # Transfer the script with debug mode
   provisioner "file" {
     source      = "${path.module}/scripts.sh"
     destination = "/tmp/scripts.sh"
@@ -62,22 +55,35 @@ resource "aws_instance" "bootstrap_instance" {
       private_key = tls_private_key.rr.private_key_pem
       host        = self.public_ip
       timeout     = "5m"
-      agent       = false
     }
   }
 
-  # Execute script with debugging
+  # Execute script with extensive debugging
   provisioner "remote-exec" {
     inline = [
-      "echo 'Setting up script...'",
+      "echo 'Starting debug script execution...'",
       "sudo chmod +x /tmp/scripts.sh",
-      "echo 'Starting script execution...'",
-      "sudo bash -x /tmp/scripts.sh || {",
-      "  echo 'Script failed. Checking logs...'",
-      "  echo '=== Last 50 lines of system log ==='",
+      "echo 'Script permissions:'",
+      "ls -l /tmp/scripts.sh",
+      "echo 'Current working directory:'",
+      "pwd",
+      "echo 'Available memory:'",
+      "free -h",
+      "echo 'Disk space:'",
+      "df -h",
+      "echo 'Executing script with debug...'",
+      "sudo bash -x /tmp/scripts.sh 2>&1 | tee /tmp/script_debug.log || {",
+      "  echo '=== Script execution failed ==='",
+      "  echo '=== Debug Log Content ==='",
+      "  cat /tmp/script_debug.log",
+      "  echo '=== System Messages ==='",
       "  sudo tail -n 50 /var/log/messages",
-      "  echo '=== Script output ==='",
-      "  cat /tmp/bootstrap.log",
+      "  echo '=== Disk Status ==='",
+      "  df -h",
+      "  echo '=== Mount Points ==='",
+      "  mount",
+      "  echo '=== Block Devices ==='",
+      "  lsblk",
       "  exit 1",
       "}"
     ]
@@ -88,7 +94,6 @@ resource "aws_instance" "bootstrap_instance" {
       private_key = tls_private_key.rr.private_key_pem
       host        = self.public_ip
       timeout     = "15m"
-      agent       = false
     }
   }
 
