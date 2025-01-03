@@ -21,18 +21,18 @@ resource "aws_instance" "bootstrap_instance" {
     delete_on_termination = true
   }
 
-  connection {
-    type        = "ssh"
-    user        = "ec2-user"
-    private_key = tls_private_key.rr.private_key_pem
-    host        = self.public_ip
-    timeout     = "10m"  # Increased timeout for lengthy bootstrap
-  }
-
-  # Upload the bootstrap script
+  # Primary connection config for creation-time provisioners
   provisioner "file" {
     source      = "${path.module}/scripts.sh"
     destination = "/tmp/scripts.sh"
+
+    connection {
+      type        = "ssh"
+      user        = "ec2-user"
+      private_key = tls_private_key.rr.private_key_pem
+      host        = self.public_ip
+      timeout     = "10m"
+    }
   }
 
   # Execute the bootstrap script
@@ -43,6 +43,35 @@ resource "aws_instance" "bootstrap_instance" {
       "echo 'Verifying bootstrap completion...'",
       "test -f /var/log/bootstrap-complete || { echo 'Bootstrap completion marker not found'; exit 1; }",
     ]
+
+    connection {
+      type        = "ssh"
+      user        = "ec2-user"
+      private_key = tls_private_key.rr.private_key_pem
+      host        = self.public_ip
+      timeout     = "10m"
+    }
+  }
+
+  # Cleanup provisioner with self-contained connection config
+  provisioner "remote-exec" {
+    when = destroy
+    
+    inline = [
+      "sudo rm -f /tmp/scripts.sh",
+      "sudo rm -f /tmp/bootstrap.log",
+    ]
+
+    connection {
+      type        = "ssh"
+      user        = "ec2-user"
+      host        = self.public_ip
+      timeout     = "5m"
+      # For destroy provisioner, use instance's own key
+      private_key = self.private_key
+    }
+    
+    on_failure = continue
   }
 
   # Optional: Wait for system status checks
@@ -60,18 +89,7 @@ resource "aws_instance" "bootstrap_instance" {
     Provisioner = "terraform"
   }
 
-  # Ensure proper cleanup on destroy
-  provisioner "remote-exec" {
-    when = destroy
-    inline = [
-      "sudo rm -f /tmp/scripts.sh",
-      "sudo rm -f /tmp/bootstrap.log",
-    ]
-    on_failure = continue
-  }
-
   lifecycle {
     create_before_destroy = true
   }
 }
-
