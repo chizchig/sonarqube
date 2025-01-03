@@ -36,21 +36,27 @@ echo "Configuring storage volumes..."
 # Configure the EBS volume (1000GB)
 if [ -b "/dev/xvda" ]; then
     echo "Configuring EBS volume..."
-    # Check if the volume is already formatted
-    if ! blkid /dev/xvda | grep -q 'TYPE='; then
-        sudo mkfs -t xfs /dev/xvda
+    
+    # Check if the volume is already mounted
+    if ! mountpoint -q /data; then
+        # Create mount point if it doesn't exist
+        sudo mkdir -p /data
+        
+        # Check if the volume is already formatted
+        if ! blkid /dev/xvda | grep -q 'TYPE='; then
+            sudo mkfs -t xfs /dev/xvda
+        fi
+        
+        # Add to fstab if not already present
+        if ! grep -q '/dev/xvda' /etc/fstab; then
+            echo "/dev/xvda /data xfs defaults,nofail 0 2" | sudo tee -a /etc/fstab
+        fi
+        
+        # Mount volume
+        sudo mount /data || echo "Mount failed, but continuing..."
+    else
+        echo "/data is already mounted, skipping mount step"
     fi
-    
-    # Create mount point
-    sudo mkdir -p /data
-    
-    # Add to fstab if not already present
-    if ! grep -q '/dev/xvda' /etc/fstab; then
-        echo "/dev/xvda /data xfs defaults,nofail 0 2" | sudo tee -a /etc/fstab
-    fi
-    
-    # Mount volume
-    sudo mount -a
 fi
 
 # Set up swap space
@@ -65,10 +71,12 @@ fi
 
 # Install AWS CLI v2
 echo "Installing AWS CLI..."
-curl "https://awscli.amazonaws.com/awscli-exe-linux-x86_64.zip" -o "awscliv2.zip"
-unzip -q awscliv2.zip
-sudo ./aws/install
-rm -rf aws awscliv2.zip
+if ! command -v aws &> /dev/null; then
+    curl "https://awscli.amazonaws.com/awscli-exe-linux-x86_64.zip" -o "awscliv2.zip"
+    unzip -q awscliv2.zip
+    sudo ./aws/install
+    rm -rf aws awscliv2.zip
+fi
 
 # Set up CloudWatch agent
 echo "Installing CloudWatch agent..."
@@ -99,17 +107,6 @@ sudo sysctl -p /etc/sysctl.d/99-custom.conf
 
 # Set timezone
 sudo timedatectl set-timezone UTC
-
-# Configure log rotation
-cat << EOF | sudo tee /etc/logrotate.d/custom
-/var/log/messages {
-    rotate 7
-    daily
-    compress
-    missingok
-    notifempty
-}
-EOF
 
 # Create status file
 echo "Bootstrap completed at $(date)" | sudo tee /var/log/bootstrap-complete
