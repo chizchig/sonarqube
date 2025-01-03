@@ -21,14 +21,25 @@ resource "aws_instance" "bootstrap_instance" {
     delete_on_termination = true
   }
 
-  # Add a delay to ensure instance is ready
+  # Wait for instance to be ready
   provisioner "local-exec" {
-    command = "sleep 30"
+    command = <<-EOT
+      echo "Waiting for instance..."
+      aws ec2 wait instance-status-ok \
+        --instance-ids ${self.id} \
+        --region ${var.aws_region}
+      echo "Instance is ready!"
+    EOT
   }
 
-  # Initial connection test
+  # Test SSH connectivity first
   provisioner "remote-exec" {
-    inline = ["echo 'Connected successfully'"]
+    inline = [
+      "echo 'Testing SSH connection...'",
+      "whoami",
+      "pwd",
+      "echo 'SSH connection successful'",
+    ]
 
     connection {
       type        = "ssh"
@@ -36,10 +47,11 @@ resource "aws_instance" "bootstrap_instance" {
       private_key = tls_private_key.rr.private_key_pem
       host        = self.public_ip
       timeout     = "5m"
+      agent       = false
     }
   }
 
-  # File transfer with error checking
+  # Transfer the script file
   provisioner "file" {
     source      = "${path.module}/scripts.sh"
     destination = "/tmp/scripts.sh"
@@ -50,21 +62,24 @@ resource "aws_instance" "bootstrap_instance" {
       private_key = tls_private_key.rr.private_key_pem
       host        = self.public_ip
       timeout     = "5m"
+      agent       = false
     }
   }
 
-  # Execute bootstrap with better error handling
+  # Execute script with debugging
   provisioner "remote-exec" {
     inline = [
+      "echo 'Setting up script...'",
       "sudo chmod +x /tmp/scripts.sh",
-      "echo 'Starting bootstrap script execution...'",
-      "if sudo /tmp/scripts.sh; then",
-      "  echo 'Bootstrap completed successfully'",
-      "else",
-      "  echo 'Bootstrap failed with exit code $?'",
-      "  sudo cat /tmp/bootstrap.log",
+      "echo 'Starting script execution...'",
+      "sudo bash -x /tmp/scripts.sh || {",
+      "  echo 'Script failed. Checking logs...'",
+      "  echo '=== Last 50 lines of system log ==='",
+      "  sudo tail -n 50 /var/log/messages",
+      "  echo '=== Script output ==='",
+      "  cat /tmp/bootstrap.log",
       "  exit 1",
-      "fi",
+      "}"
     ]
 
     connection {
@@ -72,7 +87,8 @@ resource "aws_instance" "bootstrap_instance" {
       user        = "ec2-user"
       private_key = tls_private_key.rr.private_key_pem
       host        = self.public_ip
-      timeout     = "10m"
+      timeout     = "15m"
+      agent       = false
     }
   }
 
