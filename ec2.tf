@@ -53,7 +53,7 @@ resource "aws_instance" "bootstrap_instance" {
     }
   }
 
-  # Cleanup provisioner with self-contained connection config
+  # Cleanup provisioner using the same private key as creation
   provisioner "remote-exec" {
     when = destroy
     
@@ -65,10 +65,9 @@ resource "aws_instance" "bootstrap_instance" {
     connection {
       type        = "ssh"
       user        = "ec2-user"
+      private_key = tls_private_key.rr.private_key_pem
       host        = self.public_ip
       timeout     = "5m"
-      # For destroy provisioner, use instance's own key
-      private_key = self.private_key
     }
     
     on_failure = continue
