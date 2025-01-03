@@ -53,24 +53,10 @@ resource "aws_instance" "bootstrap_instance" {
     }
   }
 
-  # Cleanup provisioner using the same private key as creation
-  provisioner "remote-exec" {
+  # Local cleanup instead of remote cleanup
+  provisioner "local-exec" {
     when = destroy
-    
-    inline = [
-      "sudo rm -f /tmp/scripts.sh",
-      "sudo rm -f /tmp/bootstrap.log",
-    ]
-
-    connection {
-      type        = "ssh"
-      user        = "ec2-user"
-      private_key = tls_private_key.rr.private_key_pem
-      host        = self.public_ip
-      timeout     = "5m"
-    }
-    
-    on_failure = continue
+    command = "echo 'Instance ${self.id} is being destroyed'"
   }
 
   # Optional: Wait for system status checks
