@@ -16,20 +16,17 @@ SONARQUBE_PORT=${SONARQUBE_PORT:-"9000"}
 NGINX_PORT=${NGINX_PORT:-"80"}
 INSTALL_DIR=${INSTALL_DIR:-"/opt/sonarqube"}
 
-# Function to check system resources
-check_system_resources() {
-    echo "Checking system resources..."
-    free -h
-    df -h
-    nproc
-}
-
-# Function to verify Java
+# Function to verify Java installation
 verify_java() {
     echo "Verifying Java installation..."
-    which java
+    which java || { echo "Java not found. Exiting."; exit 1; }
     java -version
 }
+
+# Install prerequisites
+echo "Installing prerequisites..."
+sudo yum update -y
+sudo yum install -y wget curl unzip yum-utils
 
 # Backup system configurations
 echo "Backing up system configurations..."
@@ -56,20 +53,9 @@ ${SONARQUBE_USER}   -   nproc    8192
 * hard nproc 8192
 EOF
 
-# Set up swap space
-echo "Setting up swap space..."
-if [ ! -f /swapfile ]; then
-    SWAP_SIZE=${SWAP_SIZE:-4096}
-    sudo dd if=/dev/zero of=/swapfile bs=1M count=$SWAP_SIZE
-    sudo chmod 600 /swapfile
-    sudo mkswap /swapfile
-    sudo swapon /swapfile
-    echo '/swapfile none swap sw 0 0' | sudo tee -a /etc/fstab
-fi
-
 # Install Java
 echo "Installing Java ${JAVA_VERSION}..."
-sudo yum remove java* -y || true
+sudo yum remove -y java* || true
 sudo yum install -y java-${JAVA_VERSION}-amazon-corretto
 verify_java
 
@@ -86,10 +72,8 @@ sudo -u postgres psql << EOF
 CREATE USER ${SONARQUBE_USER} WITH ENCRYPTED PASSWORD '${SONARQUBE_PASSWORD}';
 CREATE DATABASE ${SONARQUBE_DB} OWNER ${SONARQUBE_USER};
 GRANT ALL PRIVILEGES ON DATABASE ${SONARQUBE_DB} TO ${SONARQUBE_USER};
-\q
 EOF
 
-# Configure PostgreSQL authentication
 sudo sed -i 's/peer/trust/g' /var/lib/pgsql/${POSTGRESQL_VERSION}/data/pg_hba.conf
 sudo sed -i 's/ident/md5/g' /var/lib/pgsql/${POSTGRESQL_VERSION}/data/pg_hba.conf
 sudo systemctl restart postgresql-${POSTGRESQL_VERSION}
@@ -99,11 +83,12 @@ echo "Installing SonarQube version ${SONARQUBE_VERSION}..."
 sudo mkdir -p /sonarqube/
 cd /sonarqube/
 sudo curl -O https://binaries.sonarsource.com/Distribution/sonarqube/sonarqube-${SONARQUBE_VERSION}.zip
-sudo yum install unzip -y
+sudo yum install -y unzip
 sudo unzip -o sonarqube-${SONARQUBE_VERSION}.zip -d /opt/
-sudo mv /opt/sonarqube-${SONARQUBE_VERSION}/ $INSTALL_DIR
+sudo mv /opt/sonarqube-${SONARQUBE_VERSION} $INSTALL_DIR
 
 # Create sonar user and set permissions
+echo "Setting up SonarQube user and permissions..."
 sudo groupadd sonar || true
 sudo useradd -c "SonarQube - User" -d $INSTALL_DIR -g sonar $SONARQUBE_USER || true
 sudo chown -R ${SONARQUBE_USER}:sonar $INSTALL_DIR
@@ -131,7 +116,7 @@ Wants=postgresql-${POSTGRESQL_VERSION}.service
 Type=simple
 User=${SONARQUBE_USER}
 Group=sonar
-ExecStart=/bin/bash -c "$INSTALL_DIR/bin/linux-x86-64/sonar.sh console"
+ExecStart=$INSTALL_DIR/bin/linux-x86-64/sonar.sh console
 LimitNOFILE=131072
 LimitNPROC=8192
 Restart=on-failure
@@ -142,9 +127,15 @@ Environment=SONAR_JAVA_PATH=/usr/lib/jvm/java-${JAVA_VERSION}/bin/java
 WantedBy=multi-user.target
 EOF
 
+# Reload systemd and start services
+echo "Starting SonarQube service..."
+sudo systemctl daemon-reload
+sudo systemctl enable sonarqube
+sudo systemctl start sonarqube
+
 # Install and configure Nginx
 echo "Installing and configuring Nginx..."
-sudo yum install nginx -y
+sudo yum install -y nginx
 sudo tee /etc/nginx/conf.d/sonarqube.conf << EOF
 server {
     listen ${NGINX_PORT};
@@ -160,18 +151,9 @@ server {
 }
 EOF
 
-# Start services
-echo "Starting services..."
-sudo systemctl daemon-reload
-sudo systemctl enable postgresql-${POSTGRESQL_VERSION}
-sudo systemctl start postgresql-${POSTGRESQL_VERSION}
-sudo systemctl enable sonarqube
-sudo systemctl start sonarqube
 sudo systemctl enable nginx
 sudo systemctl start nginx
 
 # Verify installation
-verify_installation
-
-echo "Installation complete! Access SonarQube at: http://$(curl -s http://169.254.169.254/latest/meta-data/public-ipv4)"
-echo "Default credentials: admin/admin"
+echo "SonarQube installation completed. Access it at http://<server-ip>:${NGINX_PORT}/"
+echo "Default credentials: admin / admin"
