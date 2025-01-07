@@ -61,31 +61,19 @@ resource "aws_instance" "bootstrap_instance" {
   # Execute script with extensive debugging
   provisioner "remote-exec" {
     inline = [
-      "echo 'Starting debug script execution...'",
+      "echo 'Starting SonarQube installation...'",
       "sudo chmod +x /tmp/scripts.sh",
-      "echo 'Script permissions:'",
-      "ls -l /tmp/scripts.sh",
-      "echo 'Current working directory:'",
-      "pwd",
-      "echo 'Available memory:'",
-      "free -h",
-      "echo 'Disk space:'",
-      "df -h",
-      "echo 'Executing script with debug...'",
-      "sudo bash -x /tmp/scripts.sh 2>&1 | tee /tmp/script_debug.log || {",
-      "  echo '=== Script execution failed ==='",
-      "  echo '=== Debug Log Content ==='",
-      "  cat /tmp/script_debug.log",
-      "  echo '=== System Messages ==='",
-      "  sudo tail -n 50 /var/log/messages",
-      "  echo '=== Disk Status ==='",
-      "  df -h",
-      "  echo '=== Mount Points ==='",
-      "  mount",
-      "  echo '=== Block Devices ==='",
-      "  lsblk",
+      "echo 'Made script executable'",
+      "if sudo /tmp/scripts.sh; then",
+      "  echo 'SonarQube installation completed successfully'",
+      "  sudo systemctl status sonarqube",
+      "else",
+      "  echo 'SonarQube installation failed'",
+      "  echo 'Checking logs...'",
+      "  sudo journalctl -u sonarqube --no-pager -n 100",
+      "  sudo cat /tmp/script_debug.log",
       "  exit 1",
-      "}"
+      "fi"
     ]
 
     connection {
@@ -96,7 +84,6 @@ resource "aws_instance" "bootstrap_instance" {
       timeout     = "15m"
     }
   }
-
   tags = {
     Name        = "Bootstrap_Instance"
     Environment = var.environment
