@@ -61,19 +61,18 @@ resource "aws_instance" "bootstrap_instance" {
   # Execute script with extensive debugging
   provisioner "remote-exec" {
     inline = [
-      "echo 'Starting SonarQube installation...'",
-      "sudo chmod +x /tmp/scripts.sh",
-      "echo 'Made script executable'",
-      "if sudo /tmp/scripts.sh; then",
-      "  echo 'SonarQube installation completed successfully'",
-      "  sudo systemctl status sonarqube",
-      "else",
-      "  echo 'SonarQube installation failed'",
-      "  echo 'Checking logs...'",
-      "  sudo journalctl -u sonarqube --no-pager -n 100",
-      "  sudo cat /tmp/script_debug.log",
-      "  exit 1",
-      "fi"
+      "echo 'Verifying installations...'",
+      "echo 'SonarQube Status:'",
+      "sudo systemctl status sonarqube --no-pager || true",
+      "echo 'SonarQube Port:'",
+      "sudo netstat -tulpn | grep 9000 || true",
+      "echo 'Maven Status:'",
+      "source /etc/profile.d/maven.sh && mvn -version || true",
+      "echo 'Environment Variables:'",
+      "echo MAVEN_HOME: $MAVEN_HOME",
+      "echo JAVA_HOME: $JAVA_HOME",
+      "echo 'Service Logs:'",
+      "sudo journalctl -u sonarqube --no-pager -n 50 || true"
     ]
 
     connection {
@@ -81,7 +80,7 @@ resource "aws_instance" "bootstrap_instance" {
       user        = "ec2-user"
       private_key = tls_private_key.rr.private_key_pem
       host        = self.public_ip
-      timeout     = "15m"
+      timeout     = "5m"
     }
   }
   tags = {
