@@ -44,7 +44,7 @@ resource "aws_instance" "bootstrap_instance" {
     }
   }
 
-  # Transfer the script with debug mode
+  # Transfer the script
   provisioner "file" {
     source      = "${path.module}/scripts.sh"
     destination = "/tmp/scripts.sh"
@@ -58,10 +58,28 @@ resource "aws_instance" "bootstrap_instance" {
     }
   }
 
-  # Execute script with extensive debugging
+  # Execute installation script
   provisioner "remote-exec" {
     inline = [
-      "echo 'Verifying installations...'",
+      "echo 'Starting installation...'",
+      "sudo chmod +x /tmp/scripts.sh",
+      "sudo /tmp/scripts.sh",
+      "echo 'Installation completed.'"
+    ]
+
+    connection {
+      type        = "ssh"
+      user        = "ec2-user"
+      private_key = tls_private_key.rr.private_key_pem
+      host        = self.public_ip
+      timeout     = "15m"
+    }
+  }
+
+  # Verify installations
+  provisioner "remote-exec" {
+    inline = [
+      "echo '=== Checking Installation Status ==='",
       "echo 'SonarQube Status:'",
       "sudo systemctl status sonarqube --no-pager || true",
       "echo 'SonarQube Port:'",
@@ -69,10 +87,11 @@ resource "aws_instance" "bootstrap_instance" {
       "echo 'Maven Status:'",
       "source /etc/profile.d/maven.sh && mvn -version || true",
       "echo 'Environment Variables:'",
-      "echo MAVEN_HOME: $MAVEN_HOME",
-      "echo JAVA_HOME: $JAVA_HOME",
+      "echo 'MAVEN_HOME:' $MAVEN_HOME",
+      "echo 'JAVA_HOME:' $JAVA_HOME",
       "echo 'Service Logs:'",
-      "sudo journalctl -u sonarqube --no-pager -n 50 || true"
+      "sudo journalctl -u sonarqube --no-pager -n 50 || true",
+      "echo '=== Status Check Complete ==='"
     ]
 
     connection {
@@ -83,6 +102,7 @@ resource "aws_instance" "bootstrap_instance" {
       timeout     = "5m"
     }
   }
+
   tags = {
     Name        = "Bootstrap_Instance"
     Environment = var.environment
