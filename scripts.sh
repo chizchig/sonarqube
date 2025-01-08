@@ -3,7 +3,7 @@
 # Exit on error
 set -e
 
-echo "Starting SonarQube installation with systemd service setup..."
+echo "Starting SonarQube and Maven installation with systemd service setup..."
 
 # Function to wait for yum lock
 wait_for_yum_lock() {
@@ -15,9 +15,11 @@ wait_for_yum_lock() {
 
 # Default configuration variables
 SONARQUBE_VERSION=${SONARQUBE_VERSION:-"10.3.0.82913"}
+MAVEN_VERSION=${MAVEN_VERSION:-"3.9.6"}
 SONARQUBE_USER=${SONARQUBE_USER:-"sonar"}
 SONARQUBE_PASSWORD=${SONARQUBE_PASSWORD:-"admin123"}
 INSTALL_DIR=${INSTALL_DIR:-"/opt/sonarqube"}
+MAVEN_HOME="/opt/maven"
 
 # Setup swap space
 echo "Setting up swap space..."
@@ -54,8 +56,31 @@ echo "Installing Java 17..."
 wait_for_yum_lock
 sudo yum remove java* -y || true
 wait_for_yum_lock
-sudo yum install -y java-17-amazon-corretto
+sudo yum install -y java-17-amazon-corretto-devel
 java -version
+
+# Install Maven
+echo "Installing Maven ${MAVEN_VERSION}..."
+cd /tmp
+wget https://dlcdn.apache.org/maven/maven-3/${MAVEN_VERSION}/binaries/apache-maven-${MAVEN_VERSION}-bin.tar.gz
+sudo tar xf apache-maven-${MAVEN_VERSION}-bin.tar.gz -C /opt
+sudo ln -s /opt/apache-maven-${MAVEN_VERSION} ${MAVEN_HOME}
+
+# Configure Maven environment
+echo "Configuring Maven environment..."
+sudo tee /etc/profile.d/maven.sh << EOF
+export JAVA_HOME=/usr/lib/jvm/java-17
+export M2_HOME=${MAVEN_HOME}
+export MAVEN_HOME=${MAVEN_HOME}
+export PATH=\${M2_HOME}/bin:\${PATH}
+EOF
+
+# Apply Maven environment settings
+source /etc/profile.d/maven.sh
+
+# Verify Maven installation
+echo "Verifying Maven installation..."
+mvn -version
 
 # Download and install SonarQube
 echo "Installing SonarQube version ${SONARQUBE_VERSION}..."
@@ -120,6 +145,7 @@ TimeoutStartSec=5m
 Restart=always
 SuccessExitStatus=143
 Environment=JAVA_HOME=/usr/lib/jvm/java-17
+Environment=MAVEN_HOME=${MAVEN_HOME}
 
 [Install]
 WantedBy=multi-user.target
@@ -139,9 +165,20 @@ sleep 30
 echo "Checking service status..."
 sudo systemctl status sonarqube
 
+# Verify installations
+echo "Verifying installations..."
+echo "Java version:"
+java -version
+echo "Maven version:"
+mvn -version
+echo "SonarQube status:"
+sudo systemctl status sonarqube --no-pager
+
 # Get public IP
 PUBLIC_IP=$(curl -s http://169.254.169.254/latest/meta-data/public-ipv4)
 
-echo "Installation complete! Access SonarQube at: http://${PUBLIC_IP}:9000"
+echo "Installation complete!"
+echo "Access SonarQube at: http://${PUBLIC_IP}:9000"
 echo "Default credentials: admin/admin"
+echo "Maven is installed at: ${MAVEN_HOME}"
 echo "To check logs, use: sudo journalctl -u sonarqube -f"
