@@ -55,6 +55,35 @@ pipeline {
                     // Load required utilities
                     cloudBeesUtils = load 'cloudBeesUtils.groovy'
                     jenkinsAgents = load 'jenkinsAgents.groovy'
+                    
+                    // Initialize CloudBees connection
+                    CCloudbeeUtils.vaultCredBindingWrapper(CTLR_NAME, { cbId, cbToken ->
+                        // Test connection and validate credentials
+                        def testConnection = sh(
+                            returnStdout: true,
+                            script: """
+                                curl -s -o /dev/null -w "%{http_code}" \
+                                -H '${cbId}:${cbToken}' \
+                                'https://cloudbees.ice.dhs.gov/ems/computer/api/json'
+                            """
+                        ).trim()
+                        
+                        if (testConnection != "200") {
+                            error "Failed to connect to CloudBees API. Status code: ${testConnection}"
+                        }
+                        
+                        // Initialize agent array
+                        agentArray = sh(
+                            returnStdout: true,
+                            script: """
+                                curl -s -H '${cbId}:${cbToken}' \
+                                'https://cloudbees.ice.dhs.gov/ems/computer/api/json?tree=computer[displayName,description,assignedLabels[name]]&pretty=0' \
+                                | jq -r '.computer[] | select(.assignedLabels[].name == "sdo-jenkins") | "\(.displayName),\(.description)"'
+                            """
+                        ).split('\n')
+                        
+                        echo "Found ${agentArray.size()} Jenkins agents"
+                    })
                 }
             }
         }
