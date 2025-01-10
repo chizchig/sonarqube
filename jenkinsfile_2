@@ -9,7 +9,6 @@ VAULT_MANAGED_APP_ROLE = 'managed_vault_approle'
 CB_SECRET_PATH = 'secret/managed/cloudbees/shared'
 CTLR_NAME = 'aws'
 
-// Active Jenkins Agent Class Definition
 class ActiveJenkinsAgent implements Serializable {
     def script
     String awsInstanceId
@@ -40,6 +39,14 @@ pipeline {
         }
     }
 
+    parameters {
+        text(
+            name: 'AGENTS_TO_DETACH',
+            description: 'List of agents to detach (one per line)',
+            defaultValue: ''
+        )
+    }
+
     environment {
         CTLR_NAME = 'aws'
         DEBUG = true
@@ -50,7 +57,6 @@ pipeline {
         stage('Initialize') {
             steps {
                 script {
-                    // Load required utilities
                     cloudBeesUtils = load 'cloudBeesUtils.groovy'
                     jenkinsAgents = load 'jenkinsAgents.groovy'
                 }
@@ -72,8 +78,10 @@ pipeline {
                     
                     echo "Current node: ${currentNodeName} (${currentNodeId})"
                     
-                    // Get agents list from parameter or another job
-                    def agentsToDetach = params.AGENTS_TO_DETACH.split(',')
+                    // Parse the list parameter into an array
+                    def agentsToDetach = params.AGENTS_TO_DETACH.split('\n').collect { it.trim() }.findAll { it }
+                    echo "Agents to detach: ${agentsToDetach}"
+                    
                     def currentAgentInfo = null
                     def newestAgent = null
                     
@@ -91,13 +99,14 @@ pipeline {
                         newestAgent = newestAgentResponse.split(',')[0]
                         
                         // Process detachment
+                        echo "Starting detachment process..."
                         agentsToDetach.each { agentName ->
                             if (agentName == currentNodeName) {
                                 currentAgentInfo = agentName
-                                return // skip current agent
+                                echo "Current agent found in detach list, will handle last"
+                                return // skip for now
                             }
                             
-                            // Detach other agents
                             echo "Detaching agent: ${agentName}"
                             jenkinsAgents.doDetach(agentName, CTLR_NAME, false)
                         }
@@ -125,6 +134,8 @@ pipeline {
                             } else {
                                 error "Failed to transfer job to new agent, aborting cleanup"
                             }
+                        } else {
+                            echo "Current agent not in detach list, proceeding normally"
                         }
                     })
                 }
