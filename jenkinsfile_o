@@ -254,104 +254,122 @@ stages {
         }
     }
 
-    stage('Remove all but latest 2 Jenkins Agents') {
-        when {
-            expression { IS_MAIN }
-        }
-        steps {
-            script {
-                CCloudbeeUtils.vaultCredBindingWrapper(CTLR_NAME, { cbId, cbToken ->
-                    // 1. Build List of JenkinsAgents
-                    echo "Step 1: Building list of Jenkins Agents..."
-                    def jenkinsAgentsList = []
-                    
-                    sh(
-                        returnStdout: true,
-                        script: "curl -s -o CloudbeesAgentsJSONOutput.txt -H '${cbId}:${cbToken}' 'https://cloudbees.ice.dhs.gov/ems/computer/api/json?tree=computer[displayName,description,assignedLabels[name]]&pretty=0'"
-                    )
-                    
-                    def cloudbeesAgentsInfo = sh(returnStdout: true, script: "cat 'CloudbeesAgentsJSONOutput.txt' | jq -r '.computer[]' | select(.assignedLabels[].name == 'sdo-jenkins') | '\\(.displayName),\\(.description)'")
-                    def currentNodeName = env.NODE_NAME
-                    
-                    cloudbeesAgentsInfo.split('\n').each { line ->
-                        def (jenkinsName, description) = line.split(',')
-                        def aws_instanceId = sh(
-                            returnStdout: true,
-                            script: "aws ec2 describe-instances --filters 'Name=tag:Name,Values=${jenkinsName}' --query 'Reservations[*].Instances[*].[InstanceId,LaunchTime]' --output text"
-                        ).trim()
-                        
-                        if (aws_instanceId) {
-                            jenkinsAgentsList << [
-                                name: jenkinsName,
-                                instanceId: aws_instanceId,
-                                isCurrentNode: (jenkinsName == currentNodeName)
-                            ]
+    // Section 2: Node Management (mapped to diagram flow)
+        stage('Node Management') {
+            when {
+                expression { IS_MAIN }
+            }
+            stages {
+                stage('Build List of JenkinsAgents') {
+                    steps {
+                        script {
+                            CCloudbeeUtils.vaultCredBindingWrapper(CTLR_NAME, { cbId, cbToken ->
+                                echo "Building list of Jenkins Agents..."
+                                def jenkinsAgentsList = []
+                                
+                                sh(
+                                    returnStdout: true,
+                                    script: "curl -s -o CloudbeesAgentsJSONOutput.txt -H '${cbId}:${cbToken}' 'https://cloudbees.ice.dhs.gov/ems/computer/api/json?tree=computer[displayName,description,assignedLabels[name]]&pretty=0'"
+                                )
+                                
+                                def cloudbeesAgentsInfo = sh(returnStdout: true, script: "cat 'CloudbeesAgentsJSONOutput.txt' | jq -r '.computer[]' | select(.assignedLabels[].name == 'sdo-jenkins') | '\\(.displayName),\\(.description)'")
+                                env.JENKINS_AGENTS_INFO = cloudbeesAgentsInfo
+                            })
                         }
                     }
+                }
 
-                    // 2. Do we have More than 2 jenkins nodes?
-                    echo "Step 2: Checking number of nodes..."
-                    if (jenkinsAgentsList.size() <= 2) {
-                        echo "Not enough nodes to process (${jenkinsAgentsList.size()} nodes). Minimum required: 3"
-                        return
-                    }
-
-                    // 3. Take list, find all but latest 2 and make a new list of items to destroy
-                    echo "Step 3: Creating destroy list..."
-                    jenkinsAgentsList.sort { a, b -> 
-                        def timeA = sh(script: "aws ec2 describe-instances --instance-ids ${a.instanceId} --query 'Reservations[].Instances[].LaunchTime' --output text", returnStdout: true).trim()
-                        def timeB = sh(script: "aws ec2 describe-instances --instance-ids ${b.instanceId} --query 'Reservations[].Instances[].LaunchTime' --output text", returnStdout: true).trim()
-                        timeB <=> timeA
-                    }
-                    
-                    def toDestroyList = jenkinsAgentsList[2..-1]
-
-                    // 4. In the 'To destroy' list make sure 'current node' is at the end
-                    echo "Step 4: Ensuring current node is at end of destroy list..."
-                    def currentNodeIndex = toDestroyList.findIndexOf { it.isCurrentNode }
-                    if (currentNodeIndex != -1) {
-                        def currentNode = toDestroyList.remove(currentNodeIndex)
-                        toDestroyList << currentNode
-                    }
-
-                    // 5 & 6. Iterate through list and check if any left to remove
-                    echo "Step 5 & 6: Processing nodes..."
-                    while (toDestroyList) {
-                        def agent = toDestroyList.first()
-                        
-                        if (agent.isCurrentNode) {
-                            // Handle current node specially
-                            def newestNode = jenkinsAgentsList[0].name
-                            echo "Attempting to transfer job to newest agent: ${newestNode}"
+                stage('Check Node Count') {
+                    steps {
+                        script {
+                            def agentCount = env.JENKINS_AGENTS_INFO.split('\n').size()
+                            echo "Found ${agentCount} Jenkins agents"
                             
-                            def success = sh(
-                                script: """
-                                    jenkins-cli -s http://${newestNode}:8080 build ${env.JOB_NAME} -p TRANSFER_FROM=${currentNodeName} || exit 1
-                                    sleep 30
-                                    if curl -s http://${newestNode}:8080/job/${env.JOB_NAME}/lastBuild/api/json | grep '"building":true'; then
-                                        exit 0
-                                    else
-                                        exit 1
-                                    fi
-                                """,
-                                returnStatus: true
-                            ) == 0
-                            
-                            if (!success) {
-                                error "Failed to transfer job to new agent, aborting cleanup"
+                            if (agentCount <= 2) {
+                                echo "Not enough nodes to process (${agentCount} nodes). Minimum required: 3"
+                                currentBuild.result = 'ABORTED'
+                                error("Insufficient nodes")
                             }
-                            echo "Job successfully transferred, current agent will be detached by new instance"
-                            break
-                        } else {
-                            echo "Detaching agent: ${agent.name}"
-                            jenkinsAgents.doDetach(agent.name, CTLR_NAME, false)
-                            toDestroyList.remove(0)
                         }
                     }
+                }
 
-                    // 7. Finish
-                    echo "Step 7: Finished processing nodes"
-                })
+                stage('Process Node List') {
+                    steps {
+                        script {
+                            CCloudbeeUtils.vaultCredBindingWrapper(CTLR_NAME, { cbId, cbToken ->
+                                // Create destroy list (excluding latest 2)
+                                def currentNodeName = env.NODE_NAME
+                                def jenkinsAgentsList = []
+                                
+                                env.JENKINS_AGENTS_INFO.split('\n').each { line ->
+                                    def (jenkinsName, description) = line.split(',')
+                                    def aws_instanceId = sh(
+                                        returnStdout: true,
+                                        script: "aws ec2 describe-instances --filters 'Name=tag:Name,Values=${jenkinsName}' --query 'Reservations[*].Instances[*].[InstanceId,LaunchTime]' --output text"
+                                    ).trim()
+                                    
+                                    if (aws_instanceId) {
+                                        jenkinsAgentsList << [
+                                            name: jenkinsName,
+                                            instanceId: aws_instanceId,
+                                            isCurrentNode: (jenkinsName == currentNodeName)
+                                        ]
+                                    }
+                                }
+
+                                // Sort and create destroy list
+                                jenkinsAgentsList.sort { a, b -> 
+                                    def timeA = sh(script: "aws ec2 describe-instances --instance-ids ${a.instanceId} --query 'Reservations[].Instances[].LaunchTime' --output text", returnStdout: true).trim()
+                                    def timeB = sh(script: "aws ec2 describe-instances --instance-ids ${b.instanceId} --query 'Reservations[].Instances[].LaunchTime' --output text", returnStdout: true).trim()
+                                    timeB <=> timeA
+                                }
+                                
+                                def toDestroyList = jenkinsAgentsList[2..-1]
+
+                                // Ensure current node is at end
+                                def currentNodeIndex = toDestroyList.findIndexOf { it.isCurrentNode }
+                                if (currentNodeIndex != -1) {
+                                    def currentNode = toDestroyList.remove(currentNodeIndex)
+                                    toDestroyList << currentNode
+                                }
+
+                                // Process nodes
+                                while (toDestroyList) {
+                                    def agent = toDestroyList.first()
+                                    
+                                    if (agent.isCurrentNode) {
+                                        def newestNode = jenkinsAgentsList[0].name
+                                        echo "Attempting to transfer job to newest agent: ${newestNode}"
+                                        
+                                        def success = sh(
+                                            script: """
+                                                jenkins-cli -s http://${newestNode}:8080 build ${env.JOB_NAME} -p TRANSFER_FROM=${currentNodeName} || exit 1
+                                                sleep 30
+                                                if curl -s http://${newestNode}:8080/job/${env.JOB_NAME}/lastBuild/api/json | grep '"building":true'; then
+                                                    exit 0
+                                                else
+                                                    exit 1
+                                                fi
+                                            """,
+                                            returnStatus: true
+                                        ) == 0
+                                        
+                                        if (!success) {
+                                            error "Failed to transfer job to new agent, aborting cleanup"
+                                        }
+                                        echo "Job successfully transferred, current agent will be detached by new instance"
+                                        break
+                                    } else {
+                                        echo "Detaching agent: ${agent.name}"
+                                        jenkinsAgents.doDetach(agent.name, CTLR_NAME, false)
+                                        toDestroyList.remove(0)
+                                    }
+                                }
+                            })
+                        }
+                    }
+                }
             }
         }
     }
