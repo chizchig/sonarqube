@@ -1,0 +1,128 @@
+@Library('jenkins-sharedlib') _
+import com.cloudbees.jenkins.plugins.awscredentials.*
+import com.cloudbees.plugins.credentials.*
+import jenkins.model.Jenkins
+
+// Required initialization variables
+STATIC_NOTIFICATION_LIST = "ladsdc@ice.dhs.gov"
+VAULT_MANAGED_APP_ROLE = 'managed_vault_approle'
+CB_SECRET_PATH = 'secret/managed/cloudbees/shared'
+CTLR_NAME = 'aws'
+
+pipeline {
+    agent {
+        node {
+            label 'sdo-jenkins'
+        }
+    }
+
+    // Parameters based on the diagram
+    parameters {
+        string(
+            name: 'JENKINS_NODE_TO_DELETE',
+            description: 'Jenkins Node Name to Delete',
+            trim: true
+        )
+        string(
+            name: 'AWS_IDENTITY_TO_DELETE',
+            description: 'AWS Identity to delete',
+            trim: true
+        )
+    }
+
+    environment {
+        CTLR_NAME = 'aws'
+        DEBUG = true
+        IS_MAIN = env.BRANCH_NAME == 'main' || env.BRANCH_NAME == 'master'
+    }
+
+    stages {
+        stage('Initialize') {
+            steps {
+                script {
+                    cloudBeesUtils = load 'cloudBeesUtils.groovy'
+                    jenkinsAgents = load 'jenkinsAgents.groovy'
+                }
+            }
+        }
+
+        stage('Node Destroy') {
+            when {
+                expression { IS_MAIN }
+            }
+            steps {
+                script {
+                    def currentNodeName = env.NODE_NAME
+                    echo "Starting node destroy process for: ${params.JENKINS_NODE_TO_DELETE}"
+                    
+                    // Validate parameters
+                    if (!params.JENKINS_NODE_TO_DELETE || !params.AWS_IDENTITY_TO_DELETE) {
+                        error "Both Jenkins Node Name and AWS Identity are required"
+                    }
+
+                    // Check if trying to delete current node
+                    if (params.JENKINS_NODE_TO_DELETE == currentNodeName) {
+                        error "Cannot destroy the currently running node. Please run from a different node."
+                    }
+
+                    CCloudbeeUtils.vaultCredBindingWrapper(CTLR_NAME, { cbId, cbToken ->
+                        // Step 1: Detach single node from Jenkins
+                        echo "Step 1: Detaching node from Jenkins"
+                        try {
+                            jenkinsAgents.doDetach(params.JENKINS_NODE_TO_DELETE, CTLR_NAME, false)
+                            echo "Successfully detached node from Jenkins"
+                        } catch (Exception e) {
+                            error "Failed to detach node from Jenkins: ${e.message}"
+                        }
+
+                        // Step 2: Destroy That same Machine from AWS
+                        echo "Step 2: Destroying machine from AWS"
+                        try {
+                            def destroyResult = sh(
+                                script: """
+                                    aws ec2 terminate-instances \
+                                        --instance-ids ${params.AWS_IDENTITY_TO_DELETE} \
+                                        --output text \
+                                        --query 'TerminatingInstances[*].CurrentState.Name'
+                                """,
+                                returnStdout: true
+                            ).trim()
+                            
+                            if (destroyResult == "shutting-down" || destroyResult == "terminated") {
+                                echo "Successfully initiated AWS instance termination"
+                            } else {
+                                error "Unexpected status after termination attempt: ${destroyResult}"
+                            }
+                        } catch (Exception e) {
+                            error "Failed to destroy AWS instance: ${e.message}"
+                        }
+
+                        // Step 3: Finish
+                        echo "Node destroy process completed successfully"
+                    })
+                }
+            }
+        }
+    }
+
+    post {
+        success {
+            script {
+                echo "Node destroy process completed successfully for ${params.JENKINS_NODE_TO_DELETE}"
+            }
+        }
+        failure {
+            script {
+                emailext(
+                    subject: "Node Destroy Failed - ${env.JOB_NAME} #${env.BUILD_NUMBER}",
+                    body: """
+                        Node destroy process failed for node: ${params.JENKINS_NODE_TO_DELETE}
+                        AWS Identity: ${params.AWS_IDENTITY_TO_DELETE}
+                        Please check the logs for details.
+                    """,
+                    to: STATIC_NOTIFICATION_LIST
+                )
+            }
+        }
+    }
+}
