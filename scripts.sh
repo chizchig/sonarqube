@@ -82,6 +82,18 @@ source /etc/profile.d/maven.sh
 echo "Verifying Maven installation..."
 mvn -version
 
+# Install SonarScanner CLI (Added)
+cd /tmp
+wget https://binaries.sonarsource.com/Distribution/sonar-scanner-cli/sonar-scanner-cli-5.0.1.3006-linux.zip
+sudo unzip sonar-scanner-cli-5.0.1.3006-linux.zip -d /opt
+sudo ln -s /opt/sonar-scanner-5.0.1.3006-linux ${SCANNER_HOME}
+
+sudo tee /etc/profile.d/sonar-scanner.sh << EOF
+export PATH=${SCANNER_HOME}/bin:$PATH
+EOF
+source /etc/profile.d/sonar-scanner.sh
+sonar-scanner --version
+
 # Download and install SonarQube
 echo "Installing SonarQube version ${SONARQUBE_VERSION}..."
 cd /tmp
@@ -150,6 +162,10 @@ Environment=MAVEN_HOME=${MAVEN_HOME}
 [Install]
 WantedBy=multi-user.target
 EOF
+
+# Firewall configuration for port 9000 (Added)
+sudo firewall-cmd --permanent --add-port=9000/tcp
+sudo firewall-cmd --reload
 
 # Reload systemd and start SonarQube
 echo "Starting SonarQube..."
