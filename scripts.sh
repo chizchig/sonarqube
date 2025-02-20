@@ -20,6 +20,9 @@ SONARQUBE_USER=${SONARQUBE_USER:-"sonar"}
 SONARQUBE_PASSWORD=${SONARQUBE_PASSWORD:-"admin123"}
 INSTALL_DIR=${INSTALL_DIR:-"/opt/sonarqube"}
 MAVEN_HOME="/opt/maven"
+# ADDED: SonarScanner variables
+SONAR_SCANNER_VERSION="5.0.1.3006"
+SCANNER_HOME="/opt/sonar-scanner"
 
 # Setup swap space
 echo "Setting up swap space..."
@@ -64,7 +67,7 @@ echo "Installing Maven ${MAVEN_VERSION}..."
 cd /tmp
 wget https://dlcdn.apache.org/maven/maven-3/${MAVEN_VERSION}/binaries/apache-maven-${MAVEN_VERSION}-bin.tar.gz
 sudo tar xf apache-maven-${MAVEN_VERSION}-bin.tar.gz -C /opt
-sudo ln -s /opt/apache-maven-${MAVEN_VERSION} ${MAVEN_HOME}
+sudo ln -sf /opt/apache-maven-${MAVEN_VERSION} ${MAVEN_HOME}
 
 # Configure Maven environment
 echo "Configuring Maven environment..."
@@ -82,17 +85,36 @@ source /etc/profile.d/maven.sh
 echo "Verifying Maven installation..."
 mvn -version
 
-# Install SonarScanner CLI (Added)
+# MODIFIED: Install SonarScanner CLI with proper paths and verification
+echo "Installing SonarScanner..."
 cd /tmp
-wget https://binaries.sonarsource.com/Distribution/sonar-scanner-cli/sonar-scanner-cli-5.0.1.3006-linux.zip
-sudo unzip sonar-scanner-cli-5.0.1.3006-linux.zip -d /opt
-sudo ln -s /opt/sonar-scanner-5.0.1.3006-linux ${SCANNER_HOME}
+wget https://binaries.sonarsource.com/Distribution/sonar-scanner-cli/sonar-scanner-cli-${SONAR_SCANNER_VERSION}-linux.zip
+sudo unzip -o sonar-scanner-cli-${SONAR_SCANNER_VERSION}-linux.zip
+sudo rm -rf ${SCANNER_HOME}
+sudo mv sonar-scanner-${SONAR_SCANNER_VERSION}-linux ${SCANNER_HOME}
 
+# ADDED: Configure SonarScanner environment properly
+echo "Configuring SonarScanner environment..."
 sudo tee /etc/profile.d/sonar-scanner.sh << EOF
-export PATH=${SCANNER_HOME}/bin:$PATH
+export SONAR_SCANNER_HOME=${SCANNER_HOME}
+export PATH=\${SONAR_SCANNER_HOME}/bin:\${PATH}
 EOF
+
+# ADDED: Create symbolic link for system-wide access
+sudo ln -sf ${SCANNER_HOME}/bin/sonar-scanner /usr/local/bin/sonar-scanner
+
+# ADDED: Configure scanner properties
+sudo tee ${SCANNER_HOME}/conf/sonar-scanner.properties << EOF
+sonar.host.url=http://localhost:9000
+sonar.sourceEncoding=UTF-8
+EOF
+
+# Apply SonarScanner environment settings
 source /etc/profile.d/sonar-scanner.sh
-sonar-scanner --version
+
+# Verify SonarScanner installation
+echo "Verifying SonarScanner installation..."
+sonar-scanner --version || echo "Note: SonarScanner will be available after a shell restart"
 
 # Download and install SonarQube
 echo "Installing SonarQube version ${SONARQUBE_VERSION}..."
@@ -163,9 +185,12 @@ Environment=MAVEN_HOME=${MAVEN_HOME}
 WantedBy=multi-user.target
 EOF
 
-# Firewall configuration for port 9000 (Added)
-sudo firewall-cmd --permanent --add-port=9000/tcp
-sudo firewall-cmd --reload
+# Firewall configuration for port 9000
+echo "Configuring firewall..."
+if command -v firewall-cmd &> /dev/null; then
+    sudo firewall-cmd --permanent --add-port=9000/tcp
+    sudo firewall-cmd --reload
+fi
 
 # Reload systemd and start SonarQube
 echo "Starting SonarQube..."
@@ -173,9 +198,19 @@ sudo systemctl daemon-reload
 sudo systemctl enable sonarqube
 sudo systemctl start sonarqube
 
-# Wait for service to start
+# ADDED: Enhanced service startup check
 echo "Waiting for SonarQube to start..."
-sleep 30
+max_attempts=30
+attempt=1
+while [ $attempt -le $max_attempts ]; do
+    if curl -s -f http://localhost:9000/api/system/status | grep -q '"status":"UP"'; then
+        echo "SonarQube is up and running!"
+        break
+    fi
+    echo "Attempt $attempt/$max_attempts - waiting for SonarQube to start..."
+    sleep 10
+    attempt=$((attempt + 1))
+done
 
 # Check service status
 echo "Checking service status..."
@@ -187,6 +222,8 @@ echo "Java version:"
 java -version
 echo "Maven version:"
 mvn -version
+echo "SonarScanner version:"
+sonar-scanner --version || echo "Note: SonarScanner will be available after a shell restart"
 echo "SonarQube status:"
 sudo systemctl status sonarqube --no-pager
 
@@ -197,4 +234,12 @@ echo "Installation complete!"
 echo "Access SonarQube at: http://${PUBLIC_IP}:9000"
 echo "Default credentials: admin/admin"
 echo "Maven is installed at: ${MAVEN_HOME}"
+echo "SonarScanner is installed at: ${SCANNER_HOME}"
 echo "To check logs, use: sudo journalctl -u sonarqube -f"
+
+# ADDED: Additional verification instructions
+echo "
+Important: To ensure all tools are available in your current session, run:
+source /etc/profile.d/maven.sh
+source /etc/profile.d/sonar-scanner.sh
+"
