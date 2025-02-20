@@ -414,58 +414,7 @@ post {
     }
 }
 
-def branch = env.BRANCH_NAME.replaceAll("/", "-")
-def IP_ADDR = ""
-def INSTANCE_ID = ""
-def instanceName = now.format(DateTimeFormatter.ofPattern("yyyy.MM.dd")) + " " + env.BUILD_NUMBER
-def currentBuild.displayName = instanceName
-def IS_MAIN = (env.BRANCH_NAME == "master" || env.BRANCH_NAME == "main" || env.BRANCH_NAME.startsWith("PR-"))
-def IS_PR = env.BRANCH_NAME.startsWith("PR-")
-// Always use a unique ID, even on main
-def build_number = env.BUILD_NUMBER.padLeft(3, '0')
-def INSTANCE_IC_PLATFORM_TAG
-def branch_name = (env.BRANCH_NAME.startsWith("PR-") ? env.CHANGE_BRANCH : env.BRANCH_NAME)
-def reportName
-def liteReportName
 
-def branch = env.BRANCH_NAME.replaceAll("/", "-")
-def nexusUrl = "https://nexus2.ice.dhs.gov"
-def aws_efs_repository = "550_SEN_PARITY"
-def aws_efs_path = "amazon-eks/"
-def kubectl1_download_url
-def k8s_version = "1.30"
-
-def image_num = "180"
-
-def RHEL_MAJOR_VERSION = "RHEL8"
-
-def readyToDelete = "yes"
-def defaultDestroy = true
-if (!IS_MAIN) {
-    defaultDestroy = false
-}
-
-pipeline {
-    parameters {
-        booleanParam(defaultValue: defaultDestroy,
-            description: 'Do destroy after deploy?', name: 'DESTROY')
-    }
-    agent {
-        node {
-            label 'sdo-jenkins'
-            // label 'aws-nonprofit'
-        }
-    }
-    environment {
-        DEBUG = true
-        playbook = "sdo_jenkins.yml"
-        BUILD_ENV = "dv"
-        TENABLE_URL = "https://workproccell001.ice.dhs.gov/"
-        GIT_REPO_NAME = env.GIT_URL.replaceFirst("/.+/([^/]+)\\.git", '$1').replaceAll("/", "-")
-        NEXUS_SCAN = "NESSUS"
-        STATIC_NOTIFICATION_LIST = "ladsdc@ice.dhs.gov"
-    }
-    
     def detach(zs_account, bind_password, aws_certificate, gitToken, unregister_playbook, unregister_url, unregister_branch, IP_ADDR, BUILD_ENV, CTLR_NAME, jenkinsName) {
         def varMap = [:]
         varMap["zs_account"] = zs_account
