@@ -187,16 +187,27 @@ EOF
 
 # Firewall configuration for port 9000
 echo "Configuring firewall..."
-if command -v firewall-cmd &> /dev/null; then
-    sudo firewall-cmd --permanent --add-port=9000/tcp
-    sudo firewall-cmd --reload
+# First check if firewalld is installed, if not install it
+if ! command -v firewall-cmd &> /dev/null; then
+    echo "firewalld not found, installing..."
+    sudo yum install -y firewalld
+    sudo systemctl start firewalld
+    sudo systemctl enable firewalld
 fi
+
+# Now configure the firewall
+sudo firewall-cmd --permanent --add-port=9000/tcp
+sudo firewall-cmd --reload
 
 # Reload systemd and start SonarQube
 echo "Starting SonarQube..."
 sudo systemctl daemon-reload
 sudo systemctl enable sonarqube
 sudo systemctl start sonarqube
+
+# Verify the configuration
+echo "Verifying firewall configuration..."
+sudo firewall-cmd --list-ports
 
 # ADDED: Enhanced service startup check
 echo "Waiting for SonarQube to start..."
